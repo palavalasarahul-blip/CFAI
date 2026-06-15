@@ -1,0 +1,84 @@
+# Autonomous Cleaning Strategy Planner
+
+An explainable hybrid-AI simulator for an autonomous indoor cleaning robot. The
+application combines graph search, constraint satisfaction, utility-based
+decision making, probabilistic reasoning, and a live Streamlit dashboard.
+
+## Features
+
+- Grid house with rooms, dirt, obstacles, chargers, and a graph state space
+- Robot knowledge base for visits, dirt, obstacles, battery, and reasoning logs
+- BFS, DFS, UCS, Greedy Best-First, and A* implemented from scratch
+- Search comparisons for runtime, expanded nodes, memory, path length, and cost
+- CSP scheduling with backtracking, MRV, degree, LCV, forward checking, AC-3
+  intuition, min-conflicts, conflict detection, and failure explanations
+- Utility policies: Fast, Energy Saving, Deep Cleaning, and Balanced
+- Minimax, alpha-beta, depth-limited search, iterative deepening, and expectimax
+- Bayesian network, Bayes rule, variable elimination, sensor fusion, Markov dirt
+  prediction, HMM filtering, rejection sampling, and likelihood weighting
+- Hybrid planning workflow and an explanation for every selection and action
+- Interactive route, schedule, analytics, knowledge base, and PEAS dashboard
+- User-managed room task queue with priority, duration, availability, and status
+
+## Setup
+
+Python 3.10 or newer is recommended.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+## Run
+
+```powershell
+streamlit run main.py
+```
+
+Open `http://localhost:8501`. Select a search algorithm and policy, press
+**Start**, then use **Execute next action** to inspect each robot decision.
+You can also add Bedroom, Kitchen, Dining Hall, or other room tasks in the
+sidebar and press **Run task queue** to execute them sequentially.
+
+## Test
+
+```powershell
+pytest -q
+```
+
+## Project Structure
+
+```text
+.
+|-- environment/       Domain models and graph environment
+|-- search/            Five graph search algorithms
+|-- csp/               Constraint scheduling
+|-- probabilistic/     Bayesian and temporal reasoning
+|-- decision/          Utility and game-tree decisions
+|-- planner/           Hybrid AI orchestration
+|-- visualization/     Plotly grid, search, and schedule views
+|-- analytics/         Operational metrics
+|-- tests/             Unit and integration tests
+|-- data/              Sample room and sensor datasets
+|-- assets/            Submission assets
+|-- docs/              Architecture, manual, diagrams, and report
+|-- main.py            Streamlit application
+`-- requirements.txt
+```
+
+## Demonstration Workflow
+
+1. The environment exposes room and sensor evidence.
+2. Bayesian inference estimates present and future dirt probability.
+3. CSP creates a battery- and availability-aware room timetable.
+4. Utility scoring selects the best feasible room and cleaning policy.
+5. The selected graph search algorithm produces a traversable route.
+6. The robot moves or cleans and updates its knowledge base.
+7. The dashboard explains probability, constraints, utility, and path choice.
+
+## Documentation
+
+- [Architecture and UML](docs/architecture.md)
+- [User manual](docs/user_manual.md)
+- [Project report](docs/project_report.md)

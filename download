@@ -1,0 +1,23 @@
+from decision import DecisionEngine, Policy
+
+
+def test_room_utility_rewards_dirt_and_priority() -> None:
+    engine = DecisionEngine()
+    low = engine.evaluate_room(Policy.BALANCED, 0.2, 1, 3, 8, 0)
+    high = engine.evaluate_room(Policy.BALANCED, 0.9, 5, 3, 8, 0)
+    assert high > low
+
+
+def test_alpha_beta_matches_minimax() -> None:
+    engine = DecisionEngine()
+
+    def children(node: tuple[int, int]) -> list[tuple[int, int]]:
+        depth, value = node
+        return [] if depth == 0 else [(depth - 1, value - 1), (depth - 1, value + 2)]
+
+    evaluate = lambda node: float(node[1])
+    state = (3, 0)
+    assert engine.alpha_beta(state, 3, True, children, evaluate) == engine.minimax(
+        state, 3, True, children, evaluate
+    )
+

@@ -1,0 +1,6 @@
+room_name,room_type,priority,cleaning_duration,available_from,available_to
+Living Room,living,3,1,8,17
+Kitchen,kitchen,5,2,8,16
+Bedroom,bedroom,2,1,9,17
+Bathroom,bathroom,4,2,8,15
+Dining Hall,dining,3,1,8,17

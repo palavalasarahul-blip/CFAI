@@ -1,0 +1,62 @@
+# User Manual
+
+## Starting the Application
+
+Install dependencies and run `streamlit run main.py`. The dashboard opens at
+`http://localhost:8501`.
+
+## Controls
+
+- **Search algorithm** selects BFS, DFS, UCS, Greedy Best-First, or A*.
+- **Cleaning policy** selects Fast, Energy Saving, Deep, or Balanced behavior.
+- **Let AI select policy** asks the utility engine to choose the policy.
+- **Add task** queues a selected room with priority, duration, availability,
+  and expected dirt intensity.
+- **Run task queue** executes every pending task and updates its status.
+- **Start** senses the house and creates a complete hybrid plan.
+- **Pause** stops the run-state without deleting the plan.
+- **Resume** restores the run-state and creates a plan if necessary.
+- **Reset** creates a new deterministic demonstration environment.
+- **Execute next action** moves or cleans once. This is intentionally
+  step-based so the reasoning and state transition can be examined.
+
+## Dashboard Tabs
+
+### Environment
+
+Shows the robot (`R`), dirt (`D`), obstacle (`X`), charger (`C`), selected route
+(`*`), and expanded search cells (`.`). It also lists room beliefs and utility.
+
+### Planning
+
+Shows node expansion order, the chosen path, CSP timetable, scheduling failures,
+and a comparison of all search algorithms from the current position.
+
+### Analytics
+
+Reports area cleaned, cleaning efficiency, battery consumption, runtime,
+prediction accuracy, action history, and time-series charts.
+
+### Knowledge & XAI
+
+Explains sensor updates, room selection, constraint satisfaction, utility, and
+route choice. The knowledge base and complete action trace are available here.
+
+### AI Concepts
+
+Displays the PEAS model and summarizes how each required AI technique is used.
+
+## Typical Demonstration
+
+1. Select A* and Balanced Mode.
+2. Add Kitchen, Bedroom, and Dining Hall tasks from the sidebar.
+3. Press Start and inspect the selected room and explanation.
+4. Use Execute next action for a trace, or Run task queue for automatic execution.
+5. Open Planning to compare A* with the other algorithms.
+6. Inspect completed statuses, battery usage, and cleaning metrics.
+
+## Troubleshooting
+
+- If imports fail, activate the virtual environment and reinstall requirements.
+- If port 8501 is occupied, use `streamlit run main.py --server.port 8502`.
+- Logs are written to `cleaning_planner.log`.

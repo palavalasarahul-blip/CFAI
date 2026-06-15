@@ -1,0 +1,36 @@
+from decision import Policy
+from environment import CleaningTask, HouseEnvironment, Robot
+from planner import HybridPlanner
+from search import SearchAlgorithm
+
+
+def test_hybrid_planner_produces_explainable_route() -> None:
+    environment = HouseEnvironment.demo()
+    robot = Robot((0, 0))
+    environment.update_knowledge(robot)
+    plan = HybridPlanner(environment, robot).plan(
+        SearchAlgorithm.ASTAR, Policy.BALANCED
+    )
+    assert plan.selected_room
+    assert plan.route and plan.route.found
+    assert plan.schedule.assignments
+    assert any("selected because" in line for line in plan.explanations)
+
+
+def test_hybrid_planner_uses_only_queued_tasks() -> None:
+    environment = HouseEnvironment.demo()
+    robot = Robot((0, 0))
+    environment.update_knowledge(robot)
+    tasks = [
+        CleaningTask("Bedroom", 1, 5, 0, {8, 9, 10}),
+        CleaningTask("Dining Hall", 1, 2, 0, {10, 11, 12}),
+    ]
+    plan = HybridPlanner(environment, robot).plan(
+        SearchAlgorithm.ASTAR,
+        Policy.BALANCED,
+        requested_tasks=tasks,
+    )
+    assessed_rooms = {assessment.room_name for assessment in plan.assessments}
+    assert assessed_rooms == {"Bedroom", "Dining Hall"}
+    assert plan.selected_room in assessed_rooms
+    assert set(plan.schedule.assignments) == assessed_rooms

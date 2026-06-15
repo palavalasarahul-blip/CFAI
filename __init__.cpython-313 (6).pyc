@@ -1,0 +1,272 @@
+"""Integration of probabilistic inference, CSP, utility, and search."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import networkx as nx
+
+from csp import CSPScheduler, ScheduleResult
+from decision import DecisionEngine, Policy
+from environment import CleaningTask, HouseEnvironment, Position, Robot
+from probabilistic import DirtBayesianNetwork, SensorEvidence
+from search import SearchAlgorithm, SearchResult, search
+
+
+@dataclass
+class RoomAssessment:
+    room_name: str
+    dirt_probability: float
+    cleaning_need: float
+    distance: int
+    utility: float
+    target: Position
+
+
+@dataclass
+class PlanDecision:
+    selected_room: str | None
+    target: Position | None
+    policy: Policy
+    route: SearchResult | None
+    schedule: ScheduleResult
+    assessments: list[RoomAssessment] = field(default_factory=list)
+    explanations: list[str] = field(default_factory=list)
+
+
+class HybridPlanner:
+    def __init__(self, environment: HouseEnvironment, robot: Robot) -> None:
+        self.environment = environment
+        self.robot = robot
+        self.bayes = DirtBayesianNetwork()
+        self.decision = DecisionEngine()
+
+    def assess_rooms(
+        self,
+        policy: Policy,
+        requested_tasks: list[CleaningTask] | None = None,
+    ) -> tuple[list[RoomAssessment], list[str]]:
+        assessments: list[RoomAssessment] = []
+        trace: list[str] = []
+        task_map = {
+            task.room_name: task
+            for task in (requested_tasks or [])
+            if task.status != "Completed"
+        }
+        for index, room in enumerate(self.environment.rooms.values()):
+            if task_map and room.name not in task_map:
+                continue
+            task = task_map.get(room.name)
+            priority = task.priority if task else room.priority
+            dirty_cells = self.environment.room_dirt(room.name)
+            target_candidates = dirty_cells or sorted(
+                room.cells - self.environment.obstacles
+            )
+            if not target_candidates:
+                continue
+            occupied = (index + len(self.robot.knowledge.visited_locations)) % 3 == 0
+            prior = self.bayes.dirt_probability(room.room_type, occupied)
+            sensor = SensorEvidence(
+                dirt_sensor=bool(dirty_cells),
+                camera_sensor=len(dirty_cells) >= 2,
+                occupancy_sensor=occupied,
+            )
+            posterior, sensor_trace = self.bayes.fuse_sensors(prior, sensor)
+            predicted = self.bayes.predict_markov(posterior)
+            need = self.bayes.cleaning_need_probability(predicted, priority)
+            target, distance = self._nearest_reachable(target_candidates)
+            battery_cost = distance * self.robot.move_cost + self.robot.clean_cost
+            utility = self.decision.evaluate_room(
+                policy,
+                predicted,
+                priority,
+                distance,
+                battery_cost,
+                float(occupied),
+            )
+            assessments.append(
+                RoomAssessment(
+                    room.name, predicted, need, distance, utility, target
+                )
+            )
+            trace.extend(f"{room.name}: {line}" for line in sensor_trace)
+        return sorted(assessments, key=lambda item: item.utility, reverse=True), trace
+
+    def create_schedule(
+        self,
+        assessments: list[RoomAssessment],
+        requested_tasks: list[CleaningTask] | None = None,
+    ) -> ScheduleResult:
+        tasks: list[CleaningTask] = []
+        assessment_map = {item.room_name: item for item in assessments}
+        if requested_tasks:
+            for requested in requested_tasks:
+                if requested.status == "Completed":
+                    continue
+                assessment = assessment_map.get(requested.room_name)
+                if assessment is None:
+                    continue
+                tasks.append(
+                    CleaningTask(
+                        room_name=requested.room_name,
+                        duration=requested.duration,
+                        priority=requested.priority,
+                        battery_cost=assessment.distance * self.robot.move_cost
+                        + self.robot.clean_cost,
+                        available_slots=set(requested.available_slots),
+                        maintenance_required=requested.maintenance_required,
+                        status=requested.status,
+                    )
+                )
+        else:
+            for room in self.environment.rooms.values():
+                assessment = assessment_map.get(room.name)
+                if assessment is None or assessment.cleaning_need < 0.35:
+                    continue
+                tasks.append(
+                    CleaningTask(
+                        room_name=room.name,
+                        duration=room.cleaning_duration,
+                        priority=room.priority,
+                        battery_cost=assessment.distance * self.robot.move_cost
+                        + self.robot.clean_cost,
+                        available_slots=set(room.available_slots),
+                    )
+                )
+        if not tasks:
+            return ScheduleResult({}, True, ["No room currently exceeds the cleaning threshold."])
+        scheduler = CSPScheduler(
+            tasks,
+            battery_capacity=max(self.robot.battery, 20.0),
+            maintenance_slots={13},
+        )
+        result = scheduler.solve()
+        if not result.success:
+            local_result = scheduler.min_conflicts()
+            if local_result.success:
+                local_result.failures.insert(
+                    0, "Backtracking failed; min-conflicts produced a feasible repair."
+                )
+                return local_result
+        return result
+
+    def plan(
+        self,
+        algorithm: SearchAlgorithm = SearchAlgorithm.ASTAR,
+        policy: Policy = Policy.BALANCED,
+        automatic_policy: bool = False,
+        requested_tasks: list[CleaningTask] | None = None,
+    ) -> PlanDecision:
+        assessments, probability_trace = self.assess_rooms(policy, requested_tasks)
+        schedule = self.create_schedule(assessments, requested_tasks)
+        explanations = probability_trace[-10:]
+        if not assessments:
+            explanations.append("No reachable rooms were available for assessment.")
+            return PlanDecision(None, None, policy, None, schedule, [], explanations)
+
+        scheduled_rooms = set(schedule.assignments) if schedule.success else set()
+        eligible = [
+            item for item in assessments
+            if not scheduled_rooms or item.room_name in scheduled_rooms
+        ]
+        selected = max(eligible, key=lambda item: item.utility)
+        if automatic_policy:
+            room = self.environment.rooms[selected.room_name]
+            requested_task = next(
+                (
+                    task
+                    for task in (requested_tasks or [])
+                    if task.room_name == selected.room_name
+                ),
+                None,
+            )
+            policy_decision = self.decision.choose_policy(
+                selected.dirt_probability,
+                requested_task.priority if requested_task else room.priority,
+                selected.distance,
+                selected.distance * self.robot.move_cost + self.robot.clean_cost,
+            )
+            policy = policy_decision.policy
+            assessments, _ = self.assess_rooms(policy, requested_tasks)
+            selected = max(assessments, key=lambda item: item.utility)
+            explanations.append(policy_decision.explanation)
+
+        route = search(
+            self.environment.graph,
+            self.robot.position,
+            selected.target,
+            algorithm,
+        )
+        room = self.environment.rooms[selected.room_name]
+        requested_task = next(
+            (
+                task
+                for task in (requested_tasks or [])
+                if task.room_name == selected.room_name
+            ),
+            None,
+        )
+        effective_priority = requested_task.priority if requested_task else room.priority
+        explanations.extend(
+            [
+                f"{selected.room_name} selected because predicted dirt is "
+                f"{selected.dirt_probability:.1%}, priority is {effective_priority}, and "
+                f"utility {selected.utility:.2f} is highest among feasible rooms.",
+                (
+                    f"Scheduling constraints are satisfied at "
+                    f"{schedule.assignments.get(selected.room_name, 'an unscheduled slot')}."
+                    if schedule.success
+                    else "Schedule is infeasible; selection uses utility as a fallback."
+                ),
+                route.explanation,
+            ]
+        )
+        for line in explanations:
+            self.robot.knowledge.record(line)
+        return PlanDecision(
+            selected.room_name,
+            selected.target,
+            policy,
+            route,
+            schedule,
+            assessments,
+            explanations,
+        )
+
+    def execute_next_step(self, plan: PlanDecision) -> str:
+        if plan.route is None or not plan.route.found:
+            return "No executable route is available."
+        path = plan.route.path
+        if self.robot.position == plan.target:
+            if self.robot.position in self.environment.dirt:
+                self.environment.clean(self.robot)
+                return f"Cleaned target cell {self.robot.position}."
+            return f"Inspected {self.robot.position}; no physical dirt remained."
+        try:
+            current_index = path.index(self.robot.position)
+        except ValueError:
+            current_index = 0
+        if current_index + 1 >= len(path):
+            return "Target already reached."
+        next_position = path[current_index + 1]
+        self.robot.move_to(next_position)
+        if next_position in self.environment.chargers and self.robot.battery < 30:
+            self.robot.recharge()
+        return f"Moved one step to {next_position} toward {plan.selected_room}."
+
+    def _nearest_reachable(
+        self, candidates: list[Position]
+    ) -> tuple[Position, int]:
+        reachable: list[tuple[int, Position]] = []
+        for target in candidates:
+            try:
+                distance = nx.shortest_path_length(
+                    self.environment.graph, self.robot.position, target
+                )
+                reachable.append((int(distance), target))
+            except nx.NetworkXNoPath:
+                continue
+        if not reachable:
+            raise RuntimeError("No reachable cell exists in the room.")
+        distance, target = min(reachable)
+        return target, distance

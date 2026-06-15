@@ -1,0 +1,31 @@
+from csp import CSPScheduler
+from environment import CleaningTask
+
+
+def make_tasks() -> list[CleaningTask]:
+    return [
+        CleaningTask("Kitchen", 2, 5, 20, {8, 9, 10}),
+        CleaningTask("Bathroom", 1, 4, 15, {8, 9, 10, 11}),
+        CleaningTask("Bedroom", 1, 2, 10, {9, 10, 11, 12}),
+    ]
+
+
+def test_backtracking_schedule_has_no_conflicts() -> None:
+    scheduler = CSPScheduler(make_tasks(), battery_capacity=60, maintenance_slots={13})
+    result = scheduler.solve()
+    assert result.success
+    assert not scheduler.detect_conflicts(result.assignments)
+
+
+def test_battery_failure_is_explained() -> None:
+    scheduler = CSPScheduler(make_tasks(), battery_capacity=10)
+    result = scheduler.solve()
+    assert not result.success
+    assert any("battery" in reason.lower() for reason in result.failures)
+
+
+def test_min_conflicts_finds_simple_schedule() -> None:
+    scheduler = CSPScheduler(make_tasks(), battery_capacity=60)
+    result = scheduler.min_conflicts(max_steps=500)
+    assert result.success
+

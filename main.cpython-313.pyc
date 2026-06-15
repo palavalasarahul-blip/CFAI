@@ -1,0 +1,142 @@
+"""Interactive visualizations for the Streamlit dashboard."""
+
+from __future__ import annotations
+
+import plotly.graph_objects as go
+
+from environment import HouseEnvironment, Robot
+from search import SearchResult
+
+
+ROOM_COLORS = {
+    "Living Room": 1,
+    "Kitchen": 2,
+    "Bedroom": 3,
+    "Bathroom": 4,
+    "Dining Hall": 5,
+}
+COLOR_SCALE = [
+    [0.0, "#f8fafc"],
+    [0.2, "#dbeafe"],
+    [0.4, "#dcfce7"],
+    [0.6, "#fef3c7"],
+    [0.8, "#fce7f3"],
+    [1.0, "#e0e7ff"],
+]
+
+
+def grid_figure(
+    environment: HouseEnvironment,
+    robot: Robot,
+    route: SearchResult | None = None,
+) -> go.Figure:
+    z: list[list[int]] = []
+    labels: list[list[str]] = []
+    route_cells = set(route.path) if route else set()
+    visited = set(route.visited_order) if route else set()
+    for y in range(environment.height):
+        row: list[int] = []
+        text_row: list[str] = []
+        for x in range(environment.width):
+            position = (x, y)
+            room = environment.room_at(position)
+            row.append(ROOM_COLORS.get(room.name if room else "", 0))
+            markers: list[str] = []
+            if position in environment.obstacles:
+                markers.append("X")
+            elif position == robot.position:
+                markers.append("R")
+            elif position in environment.chargers:
+                markers.append("C")
+            if position in environment.dirt:
+                markers.append(f"D{environment.dirt[position]:.0%}")
+            if position in route_cells and position != robot.position:
+                markers.append("*")
+            elif position in visited:
+                markers.append(".")
+            text_row.append("<br>".join(markers))
+        z.append(row)
+        labels.append(text_row)
+    figure = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            text=labels,
+            texttemplate="%{text}",
+            textfont={"size": 12, "color": "#111827"},
+            colorscale=COLOR_SCALE,
+            showscale=False,
+            xgap=2,
+            ygap=2,
+            hovertemplate="Cell (%{x}, %{y})<extra></extra>",
+        )
+    )
+    figure.update_yaxes(autorange="reversed", fixedrange=True)
+    figure.update_xaxes(fixedrange=True)
+    figure.update_layout(
+        height=520,
+        margin=dict(l=20, r=20, t=20, b=20),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+    )
+    return figure
+
+
+def search_figure(result: SearchResult) -> go.Figure:
+    path_index = {position: index for index, position in enumerate(result.path)}
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=[position[0] for position in result.visited_order],
+            y=[position[1] for position in result.visited_order],
+            mode="markers",
+            name="Expanded",
+            marker=dict(
+                size=8,
+                color=list(range(len(result.visited_order))),
+                colorscale="Viridis",
+            ),
+            text=[f"Expansion {i + 1}" for i in range(len(result.visited_order))],
+        )
+    )
+    if result.path:
+        figure.add_trace(
+            go.Scatter(
+                x=[position[0] for position in result.path],
+                y=[position[1] for position in result.path],
+                mode="lines+markers",
+                name="Selected path",
+                marker=dict(size=9, color="#dc2626"),
+                line=dict(width=4, color="#dc2626"),
+                text=[f"Path step {path_index[p]}" for p in result.path],
+            )
+        )
+    figure.update_yaxes(autorange="reversed")
+    figure.update_layout(height=360, margin=dict(l=20, r=20, t=30, b=20))
+    return figure
+
+
+def schedule_figure(assignments: dict[str, int], durations: dict[str, int]) -> go.Figure:
+    figure = go.Figure()
+    for room, start in sorted(assignments.items(), key=lambda item: item[1]):
+        duration = durations.get(room, 1)
+        figure.add_trace(
+            go.Bar(
+                x=[duration],
+                y=[room],
+                base=[start],
+                orientation="h",
+                name=room,
+                text=f"{start}:00-{start + duration}:00",
+                textposition="inside",
+                hovertemplate=f"{room}: {start}:00-{start + duration}:00<extra></extra>",
+            )
+        )
+    figure.update_layout(
+        barmode="stack",
+        showlegend=False,
+        xaxis_title="Hour",
+        xaxis=dict(range=[7, 19], dtick=1),
+        height=max(260, 70 + len(assignments) * 45),
+        margin=dict(l=20, r=20, t=20, b=40),
+    )
+    return figure

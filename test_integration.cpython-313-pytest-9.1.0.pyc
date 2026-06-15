@@ -1,0 +1,206 @@
+"""BFS, DFS, UCS, Greedy Best-First, and A* search implementations."""
+
+from __future__ import annotations
+
+import heapq
+import itertools
+import time
+import tracemalloc
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable
+
+import networkx as nx
+import pandas as pd
+
+from environment.models import Position
+
+
+class SearchAlgorithm(str, Enum):
+    BFS = "BFS"
+    DFS = "DFS"
+    UCS = "UCS"
+    GREEDY = "Greedy Best-First"
+    ASTAR = "A*"
+
+
+@dataclass
+class SearchResult:
+    algorithm: str
+    path: list[Position]
+    visited_order: list[Position]
+    open_snapshots: list[list[Position]] = field(default_factory=list)
+    cost: float = 0.0
+    runtime_ms: float = 0.0
+    nodes_expanded: int = 0
+    peak_memory_kb: float = 0.0
+    explanation: str = ""
+
+    @property
+    def found(self) -> bool:
+        return bool(self.path)
+
+    @property
+    def path_length(self) -> int:
+        return max(0, len(self.path) - 1)
+
+
+def manhattan(a: Position, b: Position) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def _reconstruct(
+    parent: dict[Position, Position | None], goal: Position
+) -> list[Position]:
+    path: list[Position] = []
+    current: Position | None = goal
+    while current is not None:
+        path.append(current)
+        current = parent[current]
+    return list(reversed(path))
+
+
+def _edge_cost(graph: nx.Graph, a: Position, b: Position) -> float:
+    return float(graph.edges[a, b].get("weight", 1.0))
+
+
+def search(
+    graph: nx.Graph,
+    start: Position,
+    goal: Position,
+    algorithm: SearchAlgorithm | str = SearchAlgorithm.ASTAR,
+    heuristic: Callable[[Position, Position], float] = manhattan,
+) -> SearchResult:
+    algorithm = SearchAlgorithm(algorithm)
+    if start not in graph or goal not in graph:
+        return SearchResult(
+            algorithm=algorithm.value,
+            path=[],
+            visited_order=[],
+            explanation="Start or goal is blocked or outside the traversable graph.",
+        )
+
+    tracemalloc.start()
+    started = time.perf_counter()
+    if algorithm in (SearchAlgorithm.BFS, SearchAlgorithm.DFS):
+        result = _uninformed(graph, start, goal, algorithm)
+    else:
+        result = _priority_search(graph, start, goal, algorithm, heuristic)
+    result.runtime_ms = (time.perf_counter() - started) * 1000
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    result.peak_memory_kb = peak / 1024
+    result.explanation = (
+        f"{algorithm.value} selected a route of {result.path_length} steps with "
+        f"cost {result.cost:.2f} after expanding {result.nodes_expanded} nodes."
+        if result.found
+        else f"{algorithm.value} exhausted its frontier without reaching the goal."
+    )
+    return result
+
+
+def _uninformed(
+    graph: nx.Graph,
+    start: Position,
+    goal: Position,
+    algorithm: SearchAlgorithm,
+) -> SearchResult:
+    frontier = deque([start])
+    frontier_set = {start}
+    parent: dict[Position, Position | None] = {start: None}
+    closed: set[Position] = set()
+    visited: list[Position] = []
+    snapshots: list[list[Position]] = []
+
+    while frontier:
+        current = frontier.popleft() if algorithm == SearchAlgorithm.BFS else frontier.pop()
+        frontier_set.discard(current)
+        if current in closed:
+            continue
+        closed.add(current)
+        visited.append(current)
+        if current == goal:
+            path = _reconstruct(parent, goal)
+            cost = sum(_edge_cost(graph, a, b) for a, b in zip(path, path[1:]))
+            return SearchResult(
+                algorithm.value, path, visited, snapshots, cost, nodes_expanded=len(closed)
+            )
+        neighbors = sorted(graph.neighbors(current), reverse=algorithm == SearchAlgorithm.DFS)
+        for neighbor in neighbors:
+            if neighbor not in closed and neighbor not in frontier_set:
+                parent[neighbor] = current
+                frontier.append(neighbor)
+                frontier_set.add(neighbor)
+        snapshots.append(list(frontier))
+    return SearchResult(algorithm.value, [], visited, snapshots, nodes_expanded=len(closed))
+
+
+def _priority_search(
+    graph: nx.Graph,
+    start: Position,
+    goal: Position,
+    algorithm: SearchAlgorithm,
+    heuristic: Callable[[Position, Position], float],
+) -> SearchResult:
+    counter = itertools.count()
+    frontier: list[tuple[float, int, Position]] = [(0.0, next(counter), start)]
+    parent: dict[Position, Position | None] = {start: None}
+    g_score: dict[Position, float] = {start: 0.0}
+    closed: set[Position] = set()
+    visited: list[Position] = []
+    snapshots: list[list[Position]] = []
+
+    while frontier:
+        _, _, current = heapq.heappop(frontier)
+        if current in closed:
+            continue
+        closed.add(current)
+        visited.append(current)
+        if current == goal:
+            return SearchResult(
+                algorithm.value,
+                _reconstruct(parent, goal),
+                visited,
+                snapshots,
+                g_score[current],
+                nodes_expanded=len(closed),
+            )
+        for neighbor in graph.neighbors(current):
+            candidate = g_score[current] + _edge_cost(graph, current, neighbor)
+            if candidate >= g_score.get(neighbor, float("inf")):
+                continue
+            parent[neighbor] = current
+            g_score[neighbor] = candidate
+            if algorithm == SearchAlgorithm.UCS:
+                priority = candidate
+            elif algorithm == SearchAlgorithm.GREEDY:
+                priority = heuristic(neighbor, goal)
+            else:
+                priority = candidate + heuristic(neighbor, goal)
+            heapq.heappush(frontier, (priority, next(counter), neighbor))
+        snapshots.append([item[2] for item in sorted(frontier)])
+    return SearchResult(algorithm.value, [], visited, snapshots, nodes_expanded=len(closed))
+
+
+def compare_algorithms(
+    graph: nx.Graph, start: Position, goal: Position
+) -> tuple[pd.DataFrame, dict[str, SearchResult]]:
+    results = {
+        algorithm.value: search(graph, start, goal, algorithm)
+        for algorithm in SearchAlgorithm
+    }
+    frame = pd.DataFrame(
+        [
+            {
+                "Algorithm": result.algorithm,
+                "Runtime (ms)": result.runtime_ms,
+                "Nodes Expanded": result.nodes_expanded,
+                "Peak Memory (KB)": result.peak_memory_kb,
+                "Path Length": result.path_length,
+                "Path Cost": result.cost,
+            }
+            for result in results.values()
+        ]
+    )
+    return frame, results

@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+cleaning_planner.log
+streamlit-output.log
+streamlit-error.log
+.streamlit/secrets.toml

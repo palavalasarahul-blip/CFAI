@@ -1,0 +1,194 @@
+"""Cleaning policy selection using utility and game-tree search."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from math import inf
+from typing import Callable
+
+
+class Policy(str, Enum):
+    FAST = "Fast Cleaning"
+    ENERGY = "Energy Saving"
+    DEEP = "Deep Cleaning"
+    BALANCED = "Balanced Mode"
+
+
+@dataclass(frozen=True)
+class PolicyWeights:
+    cleaning_benefit: float
+    time_cost: float
+    battery_cost: float
+    risk_cost: float
+
+
+@dataclass
+class PolicyDecision:
+    policy: Policy
+    utility: float
+    scores: dict[str, float]
+    explanation: str
+
+
+POLICY_WEIGHTS = {
+    Policy.FAST: PolicyWeights(1.0, 1.5, 0.5, 0.4),
+    Policy.ENERGY: PolicyWeights(0.9, 0.5, 1.6, 0.5),
+    Policy.DEEP: PolicyWeights(1.6, 0.4, 0.7, 0.3),
+    Policy.BALANCED: PolicyWeights(1.2, 1.0, 1.0, 0.6),
+}
+
+
+class DecisionEngine:
+    def utility(
+        self,
+        policy: Policy,
+        dirt_probability: float,
+        room_priority: int,
+        travel_time: float,
+        battery_cost: float,
+        occupancy_risk: float = 0.0,
+    ) -> float:
+        weights = POLICY_WEIGHTS[policy]
+        benefit = dirt_probability * room_priority * 25.0
+        return (
+            weights.cleaning_benefit * benefit
+            - weights.time_cost * travel_time
+            - weights.battery_cost * battery_cost
+            - weights.risk_cost * occupancy_risk * 10.0
+        )
+
+    def choose_policy(
+        self,
+        dirt_probability: float,
+        room_priority: int,
+        travel_time: float,
+        battery_cost: float,
+        occupancy_risk: float = 0.0,
+    ) -> PolicyDecision:
+        scores = {
+            policy.value: self.utility(
+                policy,
+                dirt_probability,
+                room_priority,
+                travel_time,
+                battery_cost,
+                occupancy_risk,
+            )
+            for policy in Policy
+        }
+        selected = Policy(max(scores, key=scores.get))
+        utility = scores[selected.value]
+        return PolicyDecision(
+            selected,
+            utility,
+            scores,
+            f"{selected.value} selected with utility {utility:.2f}: expected cleaning "
+            "benefit outweighed travel, battery, and occupancy costs.",
+        )
+
+    def evaluate_room(
+        self,
+        policy: Policy,
+        dirt_probability: float,
+        priority: int,
+        distance: int,
+        battery_cost: float,
+        occupancy_probability: float,
+    ) -> float:
+        return self.utility(
+            policy,
+            dirt_probability,
+            priority,
+            distance,
+            battery_cost,
+            occupancy_probability,
+        )
+
+    def minimax(
+        self,
+        state: object,
+        depth: int,
+        maximizing: bool,
+        children: Callable[[object], list[object]],
+        evaluate: Callable[[object], float],
+    ) -> float:
+        next_states = children(state)
+        if depth == 0 or not next_states:
+            return evaluate(state)
+        values = [
+            self.minimax(child, depth - 1, not maximizing, children, evaluate)
+            for child in next_states
+        ]
+        return max(values) if maximizing else min(values)
+
+    def alpha_beta(
+        self,
+        state: object,
+        depth: int,
+        maximizing: bool,
+        children: Callable[[object], list[object]],
+        evaluate: Callable[[object], float],
+        alpha: float = -inf,
+        beta: float = inf,
+    ) -> float:
+        next_states = children(state)
+        if depth == 0 or not next_states:
+            return evaluate(state)
+        if maximizing:
+            value = -inf
+            for child in next_states:
+                value = max(
+                    value,
+                    self.alpha_beta(
+                        child, depth - 1, False, children, evaluate, alpha, beta
+                    ),
+                )
+                alpha = max(alpha, value)
+                if alpha >= beta:
+                    break
+            return value
+        value = inf
+        for child in next_states:
+            value = min(
+                value,
+                self.alpha_beta(
+                    child, depth - 1, True, children, evaluate, alpha, beta
+                ),
+            )
+            beta = min(beta, value)
+            if alpha >= beta:
+                break
+        return value
+
+    def iterative_deepening(
+        self,
+        state: object,
+        max_depth: int,
+        children: Callable[[object], list[object]],
+        evaluate: Callable[[object], float],
+    ) -> list[float]:
+        return [
+            self.alpha_beta(state, depth, True, children, evaluate)
+            for depth in range(1, max_depth + 1)
+        ]
+
+    def expectimax(
+        self,
+        state: object,
+        depth: int,
+        maximizing: bool,
+        children: Callable[[object], list[tuple[object, float]]],
+        evaluate: Callable[[object], float],
+    ) -> float:
+        outcomes = children(state)
+        if depth == 0 or not outcomes:
+            return evaluate(state)
+        values = [
+            (self.expectimax(child, depth - 1, not maximizing, children, evaluate), probability)
+            for child, probability in outcomes
+        ]
+        if maximizing:
+            return max(value for value, _ in values)
+        return sum(value * probability for value, probability in values)
+
